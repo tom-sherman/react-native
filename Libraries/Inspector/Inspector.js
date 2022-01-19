@@ -86,141 +86,112 @@ function getInspectorDataForViewAtPoint(
   }
 }
 
-class Inspector extends React.Component<
-  {
-    inspectedView: ?HostRef,
-    onRequestRerenderApp: (callback: (instance: ?HostRef) => void) => void,
-    ...
-  },
-  {
-    devtoolsAgent: ?Object,
-    hierarchy: any,
-    panelPos: string,
-    inspecting: boolean,
-    selection: ?number,
-    perfing: boolean,
-    inspected: any,
-    inspectedView: ?HostRef,
-    networking: boolean,
-    ...
-  },
-> {
-  _hideTimeoutID: TimeoutID | null = null;
-  _subs: ?Array<() => void>;
-  _setTouchedViewData: ?(TouchedViewDataAtPoint) => void;
+type InspectorProps = {
+  inspectedView: ?HostRef,
+  onRequestRerenderApp: (callback: (instance: ?HostRef) => void) => void,
+  ...
+};
 
-  constructor(props: Object) {
-    super(props);
+type InspectorState = {
+  devtoolsAgent: ?Object,
+  hierarchy: any,
+  panelPos: string,
+  inspecting: boolean,
+  selection: ?number,
+  perfing: boolean,
+  inspected: any,
+  inspectedView: ?HostRef,
+  networking: boolean,
+};
 
-    this.state = {
-      devtoolsAgent: null,
-      hierarchy: null,
-      panelPos: 'bottom',
-      inspecting: true,
-      perfing: false,
-      inspected: null,
-      selection: null,
-      inspectedView: this.props.inspectedView,
-      networking: false,
+function Inspector({
+  inspectedView,
+  onRequestRerenderApp,
+}: InspectorProps): React$Element<any> {
+  const [state, setState] = React.useState<InspectorState>({
+    devtoolsAgent: null,
+    hierarchy: null,
+    panelPos: 'bottom',
+    inspecting: true,
+    perfing: false,
+    inspected: null,
+    selection: null,
+    inspectedView: inspectedView,
+    networking: false,
+  });
+  const setTouchedViewDataRef =
+    React.useRef<?(TouchedViewDataAtPoint) => void>(null);
+  const hideTimeoutIdRef = React.useRef<?TimeoutID>(null);
+
+  React.useEffect(() => {
+    function onAgentHideNativeHighlight() {
+      if (state.inspected === null) {
+        return;
+      }
+
+      // we wait to actually hide in order to avoid flicker
+      hideTimeoutIdRef.current = setTimeout(() => {
+        setState(oldState => ({...oldState, inspected: null}));
+      }, 100);
+    }
+
+    function onAgentShowNativeHighlight(node: any) {
+      clearTimeout(hideTimeoutIdRef.current);
+
+      // Shape of `node` is different in Fabric.
+      const component = node.canonical ?? node;
+
+      component.measure((x, y, width, height, left, top) => {
+        setState(oldState => ({
+          ...oldState,
+          hierarchy: [],
+          inspected: {
+            frame: {left, top, width, height},
+          },
+        }));
+      });
+    }
+
+    function onAgentShutdown() {
+      const agent = state.devtoolsAgent;
+      if (agent != null) {
+        agent.removeListener('hideNativeHighlight', onAgentHideNativeHighlight);
+        agent.removeListener('showNativeHighlight', onAgentShowNativeHighlight);
+        agent.removeListener('shutdown', onAgentShutdown);
+
+        setState(oldState => ({...oldState, devtoolsAgent: null}));
+      }
+    }
+
+    function attachToDevtools(agent: Object) {
+      agent.addListener('hideNativeHighlight', onAgentHideNativeHighlight);
+      agent.addListener('showNativeHighlight', onAgentShowNativeHighlight);
+      agent.addListener('shutdown', onAgentShutdown);
+
+      setState(oldState => ({
+        ...oldState,
+        devtoolsAgent: agent,
+      }));
+    }
+
+    hook.on('react-devtools', attachToDevtools);
+
+    return () => {
+      hook.off('react-devtools', attachToDevtools);
+      onAgentShutdown();
+      setTouchedViewDataRef.current = null;
     };
-  }
+  }, [state.inspected, state.devtoolsAgent]);
 
-  componentDidMount() {
-    hook.on('react-devtools', this._attachToDevtools);
-    // if devtools is already started
-    if (hook.reactDevtoolsAgent) {
-      this._attachToDevtools(hook.reactDevtoolsAgent);
-    }
-  }
+  React.useEffect(() => {
+    setState(oldState => ({
+      ...oldState,
+      inspectedView,
+    }));
+  }, [inspectedView]);
 
-  componentWillUnmount() {
-    if (this._subs) {
-      this._subs.map(fn => fn());
-    }
-    hook.off('react-devtools', this._attachToDevtools);
-    this._setTouchedViewData = null;
-  }
-
-  UNSAFE_componentWillReceiveProps(newProps: Object) {
-    this.setState({inspectedView: newProps.inspectedView});
-  }
-
-  _attachToDevtools = (agent: Object) => {
-    agent.addListener('hideNativeHighlight', this._onAgentHideNativeHighlight);
-    agent.addListener('showNativeHighlight', this._onAgentShowNativeHighlight);
-    agent.addListener('shutdown', this._onAgentShutdown);
-
-    this.setState({
-      devtoolsAgent: agent,
-    });
-  };
-
-  _onAgentHideNativeHighlight = () => {
-    if (this.state.inspected === null) {
-      return;
-    }
-    // we wait to actually hide in order to avoid flicker
-    this._hideTimeoutID = setTimeout(() => {
-      this.setState({
-        inspected: null,
-      });
-    }, 100);
-  };
-
-  _onAgentShowNativeHighlight = (node: any) => {
-    clearTimeout(this._hideTimeoutID);
-
-    // Shape of `node` is different in Fabric.
-    const component = node.canonical ?? node;
-
-    component.measure((x, y, width, height, left, top) => {
-      this.setState({
-        hierarchy: [],
-        inspected: {
-          frame: {left, top, width, height},
-        },
-      });
-    });
-  };
-
-  _onAgentShutdown = () => {
-    const agent = this.state.devtoolsAgent;
-    if (agent != null) {
-      agent.removeListener(
-        'hideNativeHighlight',
-        this._onAgentHideNativeHighlight,
-      );
-      agent.removeListener(
-        'showNativeHighlight',
-        this._onAgentShowNativeHighlight,
-      );
-      agent.removeListener('shutdown', this._onAgentShutdown);
-
-      this.setState({devtoolsAgent: null});
-    }
-  };
-
-  setSelection(i: number) {
-    const hierarchyItem = this.state.hierarchy[i];
-    // we pass in ReactNative.findNodeHandle as the method is injected
-    const {measure, props, source} = hierarchyItem.getInspectorData(
-      ReactNative.findNodeHandle,
-    );
-
-    measure((x, y, width, height, left, top) => {
-      this.setState({
-        inspected: {
-          frame: {left, top, width, height},
-          style: props.style,
-          source,
-        },
-        selection: i,
-      });
-    });
-  }
-
-  onTouchPoint(locationX: number, locationY: number) {
-    this._setTouchedViewData = viewData => {
+  function onTouchPoint(locationX, locationY) {
+    setTouchedViewDataRef.current = viewData => {
       const {
         hierarchy,
         props,
@@ -234,13 +205,14 @@ class Inspector extends React.Component<
       // Sync the touched view with React DevTools.
       // Note: This is Paper only. To support Fabric,
       // DevTools needs to be updated to not rely on view tags.
-      if (this.state.devtoolsAgent && touchedViewTag) {
-        this.state.devtoolsAgent.selectNode(
+      if (state.devtoolsAgent && touchedViewTag) {
+        state.devtoolsAgent.selectNode(
           ReactNative.findNodeHandle(touchedViewTag),
         );
       }
 
-      this.setState({
+      setState(oldState => ({
+        ...oldState,
         panelPos:
           pointerY > Dimensions.get('window').height / 2 ? 'top' : 'bottom',
         selection: selectedIndex,
@@ -250,10 +222,10 @@ class Inspector extends React.Component<
           frame,
           source,
         },
-      });
+      }));
     };
     getInspectorDataForViewAtPoint(
-      this.state.inspectedView,
+      state.inspectedView,
       locationX,
       locationY,
       viewData => {
@@ -265,77 +237,93 @@ class Inspector extends React.Component<
     );
   }
 
-  setPerfing(val: boolean) {
-    this.setState({
+  function setPerfing(val) {
+    setState(oldState => ({
+      ...oldState,
       perfing: val,
       inspecting: false,
       inspected: null,
       networking: false,
-    });
+    }));
   }
 
-  setInspecting(val: boolean) {
-    this.setState({
+  function setInspecting(val) {
+    setState(oldState => ({
+      ...oldState,
       inspecting: val,
       inspected: null,
+    }));
+  }
+
+  function setSelection(i) {
+    const hierarchyItem = state.hierarchy[i];
+    // we pass in ReactNative.findNodeHandle as the method is injected
+    const {measure, props, source} = hierarchyItem.getInspectorData(
+      ReactNative.findNodeHandle,
+    );
+
+    measure((x, y, width, height, left, top) => {
+      setState(oldState => ({
+        ...oldState,
+        inspected: {
+          frame: {left, top, width, height},
+          style: props.style,
+          source,
+        },
+        selection: i,
+      }));
     });
   }
 
-  setTouchTargeting(val: boolean) {
+  function setTouchTargeting(val) {
     PressabilityDebug.setEnabled(val);
-    this.props.onRequestRerenderApp(inspectedView => {
-      this.setState({inspectedView});
+    onRequestRerenderApp(newInspectedView => {
+      setState(oldState => ({...oldState, inspectedView: newInspectedView}));
     });
   }
 
-  setNetworking(val: boolean) {
-    this.setState({
+  function setNetworking(val) {
+    setState(oldState => ({
+      ...oldState,
       networking: val,
       perfing: false,
       inspecting: false,
       inspected: null,
-    });
+    }));
   }
 
-  render(): React.Node {
-    const panelContainerStyle =
-      this.state.panelPos === 'bottom'
-        ? {bottom: 0}
-        : {top: Platform.OS === 'ios' ? 20 : 0};
-    return (
-      <View style={styles.container} pointerEvents="box-none">
-        {this.state.inspecting && (
-          <InspectorOverlay
-            inspected={this.state.inspected}
-            // $FlowFixMe[method-unbinding] added when improving typing for this parameters
-            onTouchPoint={this.onTouchPoint.bind(this)}
-          />
-        )}
-        <View style={[styles.panelContainer, panelContainerStyle]}>
-          <InspectorPanel
-            devtoolsIsOpen={!!this.state.devtoolsAgent}
-            inspecting={this.state.inspecting}
-            perfing={this.state.perfing}
-            // $FlowFixMe[method-unbinding] added when improving typing for this parameters
-            setPerfing={this.setPerfing.bind(this)}
-            // $FlowFixMe[method-unbinding] added when improving typing for this parameters
-            setInspecting={this.setInspecting.bind(this)}
-            inspected={this.state.inspected}
-            hierarchy={this.state.hierarchy}
-            selection={this.state.selection}
-            // $FlowFixMe[method-unbinding] added when improving typing for this parameters
-            setSelection={this.setSelection.bind(this)}
-            touchTargeting={PressabilityDebug.isEnabled()}
-            // $FlowFixMe[method-unbinding] added when improving typing for this parameters
-            setTouchTargeting={this.setTouchTargeting.bind(this)}
-            networking={this.state.networking}
-            // $FlowFixMe[method-unbinding] added when improving typing for this parameters
-            setNetworking={this.setNetworking.bind(this)}
-          />
-        </View>
+  const panelContainerStyle =
+    state.panelPos === 'bottom'
+      ? {bottom: 0}
+      : {top: Platform.OS === 'ios' ? 20 : 0};
+
+  return (
+    <View style={styles.container} pointerEvents="box-none">
+      {state.inspecting && (
+        <InspectorOverlay
+          inspected={state.inspected}
+          onTouchPoint={onTouchPoint.bind(this)}
+        />
+      )}
+      <View style={[styles.panelContainer, panelContainerStyle]}>
+        <InspectorPanel
+          devtoolsIsOpen={!!state.devtoolsAgent}
+          inspecting={state.inspecting}
+          perfing={state.perfing}
+          setPerfing={setPerfing}
+          setInspecting={setInspecting}
+          inspected={state.inspected}
+          hierarchy={state.hierarchy}
+          selection={state.selection}
+          setSelection={setSelection}
+          touchTargeting={PressabilityDebug.isEnabled()}
+          setTouchTargeting={setTouchTargeting}
+          networking={state.networking}
+          setNetworking={setNetworking}
+        />
       </View>
-    );
-  }
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
